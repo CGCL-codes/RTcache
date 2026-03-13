@@ -343,7 +343,7 @@ class LatencyAdder : public ClockedObject
     /** constructor
      */
     LatencyAdder(const LatencyAdderParams &params);
-    void LatencyAdderClean(){
+    ~LatencyAdder() {
       delete Hitmodel;
       std::cout<<"LatencyAdder destory"<<std::endl;
     }

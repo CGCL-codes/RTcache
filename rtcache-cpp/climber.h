@@ -79,6 +79,7 @@ class climberobj
         uint64_t map2weakaddr;
     double  gaussrand(double mu, double sigma);
   	climberobj(uint64_t areasize,int swap_time);
+  	~climberobj();
   	uint64_t getrandom(uint64_t start, uint64_t end);
   	uint64_t* climber(uint64_t addr_temp, uint64_t counterv);
     void clear(void);

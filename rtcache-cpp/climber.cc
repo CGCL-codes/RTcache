@@ -371,3 +371,18 @@ uint64_t* climberobj::access(uint64_t addr_temp,bool iswrite){
 // }	
 //#endif
 
+
+climberobj::~climberobj() {
+    free(life2sorted);
+    free(lifelist);
+    free(lifelist2);
+    free(sortedlist);
+    free(maplist);
+    free(reverselist);
+    free(sortednow);
+    free(climbla2hot);
+    free(climberlocthre);
+    free(climberstart);
+    free(visitcount);
+    free(ans);
+}
