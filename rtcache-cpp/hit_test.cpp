@@ -59,11 +59,15 @@ int main(int argc, char **argv)
 {
     // 检查参数数量
     po::options_description desc("Allowed options");
-    desc.add_options()("cache-type", po::value<int>()->default_value(1), "set cache type")("wl-type", po::value<int>()->default_value(0), "set wl-type")("swap-time", po::value<int>()->default_value(2048), "swap-time")("hbm-size", po::value<int>()->default_value(8192), "set hbm size")("rt-group", po::value<int>()->default_value(8), "set rt-group option")("pre", po::value<int>()->default_value(0), "set pre value")("random-start", po::value<int>()->default_value(1), "set random value")("rt-dt", po::value<int>()->default_value(0), "set rt-dt value")("ratio", po::value<double>()->default_value(0.75), "set ratio value")("input-file", po::value<std::string>()->default_value(""), "set path value");
+    desc.add_options()("help,h", "show help message")("cache-type", po::value<int>()->default_value(1), "set cache type")("wl-type", po::value<int>()->default_value(0), "set wl-type")("swap-time", po::value<int>()->default_value(2048), "swap-time")("hbm-size", po::value<int>()->default_value(8192), "set hbm size")("rt-group", po::value<int>()->default_value(8), "set rt-group option")("pre", po::value<int>()->default_value(0), "set pre value")("random-start", po::value<int>()->default_value(1), "set random value")("rt-dt", po::value<int>()->default_value(0), "set rt-dt value")("ratio", po::value<double>()->default_value(0.75), "set ratio value")("input-file", po::value<std::string>()->default_value(""), "set path value");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
     po::notify(vm);
+    if (vm.count("help")) {
+        std::cout << desc << std::endl;
+        return 0;
+    }
 
     int cache_type = vm["cache-type"].as<int>(); // cache类型
     int wl_type = vm["wl-type"].as<int>();       // wl 类型
@@ -289,27 +293,86 @@ int main(int argc, char **argv)
 
     size_t offset = 0;
 
+    // Detect trace format based on file extension and content
+    enum TraceFormat { FMT_POUT_TEXT, FMT_POUT_BIN, FMT_VOUT, FMT_TRACE };
+    TraceFormat fmt = FMT_POUT_TEXT;
+    if (extension == "vout") {
+        fmt = FMT_VOUT;
+    } else if (extension == "trace") {
+        fmt = FMT_TRACE;
+    } else if (extension == "pout") {
+        // Detect binary .pout: 2nd byte is 0 in binary format (16-byte records)
+        if (fileSize >= 16 && data[1] == '\0') {
+            fmt = FMT_POUT_BIN;
+        }
+    }
+
+    const char* fmt_names[] = {"pout_text", "pout_binary", "vout", "trace"};
+    std::cout << "Trace format: " << fmt_names[fmt] << std::endl;
+
+    // For .vout, skip Valgrind/Callgrind header lines (lines starting with == or --)
+    if (fmt == FMT_VOUT) {
+        while (offset < fileSize) {
+            if (data[offset] == '[') break; // data lines start with [
+            const char *lineEnd = static_cast<const char *>(memchr(data + offset, '\n', fileSize - offset));
+            if (!lineEnd) break;
+            offset = (lineEnd - data) + 1;
+        }
+    }
+
     while (offset < fileSize)
     {
-
-        const char *lineEnd = static_cast<const char *>(memchr(data + offset, '\n', fileSize - offset));
-        // cout<<lineEnd<<endl;
-        if (!lineEnd)
-            break;
-
-        std::string line(data + offset, lineEnd - (data + offset));
-        std::istringstream iss(line);
         TraceEntry entry;
-        std::string addr_str;
+        bool parsed = false;
 
-        iss >> entry.operation >> addr_str;
+        if (fmt == FMT_POUT_BIN) {
+            // Binary .pout: 16-byte records (8-byte op padded + 8-byte LE address)
+            if (offset + 16 > fileSize) break;
+            entry.operation = data[offset];
+            memcpy(&entry.address, data + offset + 8, sizeof(uint64_t));
+            offset += 16;
+            parsed = true;
+        } else {
+            const char *lineEnd = static_cast<const char *>(memchr(data + offset, '\n', fileSize - offset));
+            if (!lineEnd) break;
+            std::string line(data + offset, lineEnd - (data + offset));
+            offset = (lineEnd - data) + 1;
 
-        entry.address = std::stoull(addr_str, nullptr, 16);
-        // cout<< entry.operation<< " "<<entry.address<<endl;
-        // std::cout << "Operation: " << entry.operation << ", Address: 0x"
-        //           << std::hex << entry.address << std::dec << std::endl;
+            if (line.empty()) continue;
 
-        offset += (lineEnd - (data + offset)) + 1;
+            if (fmt == FMT_POUT_TEXT) {
+                // Format: R 0x3c04ed6e80 [optional_timestamp]
+                std::istringstream iss(line);
+                std::string addr_str;
+                iss >> entry.operation >> addr_str;
+                entry.address = std::stoull(addr_str, nullptr, 16);
+                parsed = true;
+            } else if (fmt == FMT_VOUT) {
+                // Format: [R 1fff000540 769387.698332]
+                if (line[0] != '[') continue; // skip non-data lines
+                char op;
+                char hex_addr[128];
+                if (sscanf(line.c_str(), "[%c %127[^] ]", &op, hex_addr) == 2) {
+                    entry.operation = op;
+                    entry.address = std::stoull(hex_addr, nullptr, 16);
+                    parsed = true;
+                }
+            } else if (fmt == FMT_TRACE) {
+                // Format: timestamp col2 decimal_address size rw_flag
+                // rw_flag: 0=Write, 1=Read
+                std::istringstream iss(line);
+                uint64_t ts, col2, addr;
+                int sz, rw;
+                if (iss >> ts >> col2 >> addr >> sz >> rw) {
+                    entry.operation = rw ? 'R' : 'W';
+                    entry.address = addr;
+                    parsed = true;
+                }
+            }
+        }
+
+        if (!parsed) continue;
+
 
         uint64_t dram_num = entry.address / PageSize;
 
