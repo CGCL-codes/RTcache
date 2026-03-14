@@ -1,0 +1,199 @@
+#!/bin/bash
+#
+# gem5-omnetpp.sh - RTcache gem5 SPEC 专项测试脚本
+#
+# 功能: 针对单个 SPEC benchmark 遍历参数组合运行 gem5 模拟
+#       包含 fast-forward（跳过前N条指令预热）和 L2 cache 配置
+#       默认测试 mcf（内存密集型），可修改 benchmark 列表
+#
+# 用法: ./gem5-omnetpp.sh <output_directory>
+#
+# 注意: 原脚本名为 gem5-omnetpp，但 omnetpp 在 SPEC2017 中未编译
+#       已改为使用 mcf 等已编译的 benchmark
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <output_directory>"
+  exit 1
+fi
+
+output_base_dir=$1
+
+# ===== 路径配置 =====
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+gem5_dir="$(cd "$SCRIPT_DIR/.." && pwd)"
+gem5_script="$gem5_dir/configs/deprecated/example/diy.py"
+
+# SPEC CPU 配置
+# --- SPEC CPU 2017 ---
+spec_version="2017"
+spec_base_dir="/home/chen/speccpu2017/benchspec/CPU"
+spec_run_suffix="run/run_base_refrate_mytest-m64.0000"
+# --- SPEC CPU 2006 ---
+# spec_version="2006"
+# spec_base_dir="/home/chen/spec2006"
+# spec_run_suffix=""
+
+# ===== 参数配置 =====
+cache_types=(0)
+wl_types=(1 2 3)
+pre_values=(0)
+dt_values=(0)
+rt_group_values=(8)
+fast_forward_values=(100000000)
+max_inst_values=(1500000000)
+hbm_sizes=(8kB)
+rt_values=(1)
+
+# ===== SPEC 测试命令 =====
+declare -A spec_commands
+declare -A spec_dirs
+
+if [ "$spec_version" = "2017" ]; then
+  spec_dirs[mcf]="505.mcf_r"
+  spec_commands[mcf]='-c ./mcf_r_base.mytest-m64 --option="inp.in"'
+
+  spec_dirs[lbm]="519.lbm_r"
+  spec_commands[lbm]='-c ./lbm_r_base.mytest-m64 --option="3000 reference.dat 0 0 100_100_130_ldc.of"'
+
+  spec_dirs[namd]="508.namd_r"
+  spec_commands[namd]='-c ./namd_r_base.mytest-m64 --option="--input apoa1.input --output apoa1.ref.output --iterations 65"'
+
+  spec_dirs[cactuBSSN]="507.cactuBSSN_r"
+  spec_commands[cactuBSSN]='-c ./cactusBSSN_r_base.mytest-m64 --option="spec_ref.par"'
+
+  # 未编译:
+  # spec_dirs[omnetpp]="520.omnetpp_r"
+  # spec_commands[omnetpp]='-c ./omnetpp_r_base.mytest-m64 --option="-c General -r 0"'
+  # spec_dirs[deepsjeng]="531.deepsjeng_r"
+  # spec_commands[deepsjeng]='-c ./deepsjeng_r_base.mytest-m64 --option="ref.txt"'
+else
+  spec_dirs[mcf]="mcf"
+  spec_commands[mcf]='-c ./mcf_base.x86_64_sse --option="inp.in"'
+  spec_dirs[omnetpp]="omnetpp"
+  spec_commands[omnetpp]='-c ./omnetpp_base.x86_64_sse --option="omnetpp.ini"'
+  spec_dirs[libquantum]="libquantum"
+  spec_commands[libquantum]='-c ./libquantum_base.x86_64_sse --option="1397 8"'
+  spec_dirs[sjeng]="sjeng"
+  spec_commands[sjeng]='-c ./sjeng_base.x86_64_sse --option="input/ref.txt"'
+  spec_dirs[astar]="astar"
+  spec_commands[astar]='-c ./astar_base.x86_64_sse --option="rivers.cfg"'
+  spec_dirs[milc]="milc"
+  spec_commands[milc]='-c ./milc_base.x86_64_sse -i input/su3imp.in'
+fi
+
+max_jobs=15
+
+if [ ! -f "$gem5_dir/build/X86/gem5.opt" ]; then
+  echo "Error: gem5 binary not found at $gem5_dir/build/X86/gem5.opt"
+  exit 1
+fi
+
+is_memory_sufficient() {
+  local free_memory_kb=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
+  local total_memory_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+  local free_memory_percentage=$((free_memory_kb * 100 / total_memory_kb))
+  [ "$free_memory_percentage" -gt 45 ]
+}
+
+get_test_dir() {
+  local test_name=$1
+  local bench_dir=${spec_dirs[$test_name]}
+  if [ "$spec_version" = "2017" ]; then
+    echo "$spec_base_dir/$bench_dir/$spec_run_suffix"
+  else
+    echo "$spec_base_dir/$bench_dir"
+  fi
+}
+
+process_spec_test() {
+  local test_name=$1 cache_type=$2 wl_type=$3 swap_time=$4 pre=$5
+  local dt=$6 rt_group=$7 fast_forward=$8 max_inst=$9 hbm_size=${10} rt=${11}
+
+  local spec_command=${spec_commands[$test_name]}
+  if [ -z "$spec_command" ]; then
+    echo "Error: No command for $test_name" | tee -a error_log.txt
+    return
+  fi
+
+  local output_dir="$output_base_dir/${test_name}_cache${cache_type}_wl${wl_type}_swap${swap_time}_pre${pre}_ff${fast_forward}_I${max_inst}_hbm${hbm_size}_rt${rt}"
+  [ "$cache_type" -eq 1 ] && output_dir+="_dt${dt}_rtgroup${rt_group}"
+  mkdir -p "$output_dir"
+
+  if [ -f "$output_dir/stats.txt" ] && [ -s "$output_dir/stats.txt" ]; then
+    echo "Skipping $test_name (stats.txt exists)"
+    return
+  fi
+
+  local test_dir
+  test_dir=$(get_test_dir "$test_name")
+  if [ ! -d "$test_dir" ]; then
+    echo "Error: Test directory not found: $test_dir" | tee -a error_log.txt
+    return
+  fi
+  cd "$test_dir"
+
+  local cmd="$gem5_dir/build/X86/gem5.opt --outdir=$output_dir -re $gem5_script"
+  cmd+=" $spec_command --cpu-type X86TimingSimpleCPU --cpu-clock 3GHz"
+  cmd+=" --cache-type=$cache_type --wl-type=$wl_type --swap-time=$swap_time"
+  cmd+=" --hbm-size=$hbm_size --pre=$pre --fast-forward=$fast_forward"
+  cmd+=" -I $max_inst --hybird=true --l2cache --l1d_size 16kB --l1i_size 64kB --l2_size 256kB --RT=$rt"
+  [ "$cache_type" -eq 1 ] && cmd+=" --rt-dt=$dt --rt-group=$rt_group"
+
+  echo "Executing: $cmd"
+  eval $cmd
+}
+
+# ===== 主循环 =====
+# 默认测试 mcf（内存密集型）。如需测试其他 benchmark，修改下面的名称
+# 可选: mcf, lbm, namd, cactuBSSN (2017) 或 mcf, omnetpp, sjeng, astar, milc (2006)
+active_benchmarks=(mcf)
+
+for rt in "${rt_values[@]}"; do
+  for wl_type in "${wl_types[@]}"; do
+    [ "$wl_type" -eq 3 ] && cache_types=(0) && pre_values=(0)
+
+    for cache_type in "${cache_types[@]}"; do
+      case $wl_type in
+        1) swap_times=(32) ;;
+        2) swap_times=(10) ;;
+        0|3) swap_times=(2048) ;;
+      esac
+      [ "$cache_type" -eq 0 ] && pre_values=(0)
+
+      for swap_time in "${swap_times[@]}"; do
+        for pre in "${pre_values[@]}"; do
+          for fast_forward in "${fast_forward_values[@]}"; do
+            for max_inst in "${max_inst_values[@]}"; do
+              for hbm_size in "${hbm_sizes[@]}"; do
+                if [ "$cache_type" -eq 1 ]; then
+                  for dt in "${dt_values[@]}"; do
+                    for rt_group in "${rt_group_values[@]}"; do
+                      while [ $(jobs | wc -l) -ge $max_jobs ] || ! is_memory_sufficient; do
+                        sleep 10
+                      done
+                      for bench in "${active_benchmarks[@]}"; do
+                        process_spec_test "$bench" "$cache_type" "$wl_type" "$swap_time" "$pre" "$dt" "$rt_group" "$fast_forward" "$max_inst" "$hbm_size" "$rt" &
+                      done
+                    done
+                  done
+                else
+                  while [ $(jobs | wc -l) -ge $max_jobs ] || ! is_memory_sufficient; do
+                    sleep 10
+                  done
+                  for bench in "${active_benchmarks[@]}"; do
+                    process_spec_test "$bench" "$cache_type" "$wl_type" "$swap_time" "$pre" 0 0 "$fast_forward" "$max_inst" "$hbm_size" "$rt" &
+                  done
+                fi
+              done
+            done
+          done
+        done
+      done
+    done
+  done
+done
+
+wait
+echo "All tasks completed."
