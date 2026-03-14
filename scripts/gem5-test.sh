@@ -59,8 +59,7 @@ declare -A spec_commands
 declare -A spec_dirs
 
 if [ "$spec_version" = "2017" ]; then
-  # SPEC CPU 2017 (rate 版本)
-  # 已编译:
+  # SPEC CPU 2017 (rate 版本, 全部已编译)
   spec_dirs[mcf]="505.mcf_r"
   spec_commands[mcf]='-c ./mcf_r_base.mytest-m64 --option="inp.in"'
 
@@ -82,15 +81,27 @@ if [ "$spec_version" = "2017" ]; then
   spec_dirs[povray]="511.povray_r"
   spec_commands[povray]='-c ./povray_r_base.mytest-m64 --option="SPEC-benchmark-ref.ini"'
 
-  # 未编译 (需先 runcpu --action=build, 见 README):
-  # spec_dirs[omnetpp]="520.omnetpp_r"
-  # spec_commands[omnetpp]='-c ./omnetpp_r_base.mytest-m64 --option="-c General -r 0"'
-  # spec_dirs[deepsjeng]="531.deepsjeng_r"
-  # spec_commands[deepsjeng]='-c ./deepsjeng_r_base.mytest-m64 --option="ref.txt"'
-  # spec_dirs[xalancbmk]="523.xalancbmk_r"
-  # spec_commands[xalancbmk]='-c ./xalancbmk_r_base.mytest-m64 --option="-v t5.xml xalanc.xsl"'
-  # spec_dirs[xz]="557.xz_r"
-  # spec_commands[xz]='-c ./xz_r_base.mytest-m64 --option="cld.tar.xz 160 19cf30ae51eddcbefda78dd06014b4b96281456e078ca7c13e1c0c9e6aaea8dff3efb4ad6b0456697718cede6bd5454852652806a657bb56e07d61128434b474 59796407 61004416 6"'
+  spec_dirs[omnetpp]="520.omnetpp_r"
+  spec_commands[omnetpp]='-c ./omnetpp_r_base.mytest-m64 --option="-c General -r 0"'
+
+  spec_dirs[deepsjeng]="531.deepsjeng_r"
+  spec_commands[deepsjeng]='-c ./deepsjeng_r_base.mytest-m64 --option="ref.txt"'
+
+  spec_dirs[xalancbmk]="523.xalancbmk_r"
+  spec_commands[xalancbmk]='-c ./cpuxalan_r_base.mytest-m64 --option="-v t5.xml xalanc.xsl"'
+
+  spec_dirs[xz]="557.xz_r"
+  spec_commands[xz]='-c ./xz_r_base.mytest-m64 --option="input.combined.xz 250 a841f68f38572a49d86226b7ff5baeb31bd19dc637a922a972b2e6d1257a890f6a544ecab967c313e370478c74f760eb229d4eef8a8d2836d233d3e9dd1430bf 40401484 41217675 7"'
+
+  spec_dirs[gcc]="502.gcc_r"
+  spec_commands[gcc]='-c ./cpugcc_r_base.mytest-m64 --option="ref32.c -O3 -fselective-scheduling -fselective-scheduling2 -o ref32.opts-O3_-fselective-scheduling_-fselective-scheduling2.s"'
+
+  spec_dirs[leela]="541.leela_r"
+  spec_commands[leela]='-c ./leela_r_base.mytest-m64 --option="ref.sgf"'
+
+  spec_dirs[exchange2]="548.exchange2_r"
+  spec_commands[exchange2]='-c ./exchange2_r_base.mytest-m64 --option="6"'
+
 
 else
   # SPEC CPU 2006
